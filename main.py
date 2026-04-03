@@ -46,13 +46,14 @@ class TrayIconManager:
         self.icon = None
         self._create_icon()
 
-    def _generate_image(self, color: str, bounds: tuple):
-        """Generates an RGBA icon based on specific bounds."""
+    def _generate_image(self, color: str):
+        """Generates a simple circle icon of the specified color."""
         width = 64
         height = 64
         image = self.Image.new('RGBA', (width, height), (0, 0, 0, 0))
         dc = self.ImageDraw.Draw(image)
-        dc.ellipse(bounds, fill=color)
+        # Draw a colored circle with standard padding
+        dc.ellipse((8, 8, 56, 56), fill=color)
         return image
 
     def _create_icon(self):
@@ -60,21 +61,19 @@ class TrayIconManager:
         self.set_state_idle()
 
     def set_state_idle(self):
-        """A very tiny, subtle dark gray dot to keep AppIndicator alive without being annoying."""
+        """Gray icon: daemon is running and ready."""
         if self.icon:
-            # Small 8x8 dot in the dead center
-            self.icon.icon = self._generate_image("#555555", (28, 28, 36, 36))
+            self.icon.icon = self._generate_image("gray")
 
     def set_state_listening(self):
         """Red icon: currently recording audio."""
         if self.icon:
-            # Original functional boundaries
-            self.icon.icon = self._generate_image("red", (8, 8, 56, 56))
+            self.icon.icon = self._generate_image("red")
 
     def set_state_transcribing(self):
         """Green icon: processing audio with Whisper."""
         if self.icon:
-            self.icon.icon = self._generate_image("green", (8, 8, 56, 56))
+            self.icon.icon = self._generate_image("green")
 
     def run(self):
         self.icon.run()
@@ -245,7 +244,7 @@ if __name__ == "__main__":
     # Optional arguments for configuration (used only with --daemon)
     parser.add_argument("--lang", type=str, default="uk", help="Transcription language (e.g., uk, en)")
     parser.add_argument("--model", type=str, default="large-v3", help="Whisper model size (base, small, large-v3)")
-    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"], help="Compute device")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"], help="Compute device (cpu, cuda)")
 
     args = parser.parse_args()
 
