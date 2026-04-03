@@ -1,0 +1,7 @@
+MAGWER
+Олександр, Мойсеюк
+NixOS, Wayland
+Python, PyCharm, FastAPI, Flask, PostgreSQL
+React, JS
+AI, n8n, Make, MakeAI, OpenClaw
+ChatGPT, Gemini, Claude, Claude Code

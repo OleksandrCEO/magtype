@@ -1,55 +1,83 @@
 import os
-import sys
 import socket
 import threading
 import subprocess
 import argparse
 import tempfile
+
 import numpy as np
+import pystray
 import sounddevice as sd
 import soundfile as sf
+
+from PIL import Image, ImageDraw
+from pathlib import Path
 from faster_whisper import WhisperModel
 
 # --- Constants ---
 SOCKET_PATH = "/tmp/magtype.sock"
 AUDIO_SAMPLE_RATE = 16000
-MODEL_SIZE = "base"  # Change to "large-v3" later, using "base" for quick testing
 
 
-class SystemNotifier:
-    """Handles system notifications via KDE/Linux native notify-send."""
-
-    @staticmethod
-    def notify(title: str, message: str, icon: str = "dialog-information"):
-        # We use subprocess to call the system notification tool
-        try:
-            subprocess.run([
-                "notify-send",
-                "-a", "MagType",
-                "-i", icon,
-                "-t", "2000",  # Disappear after 2 seconds
-                title,
-                message
-            ], check=True)
-        except Exception as e:
-            print(f"Failed to send notification: {e}")
-
-
-class KeyboardController:
-    """Handles interaction with Wayland via wtype."""
+class ClipboardController:
+    """Handles Wayland clipboard operations via wl-copy."""
 
     @staticmethod
-    def type_text(text: str):
+    def paste_text(text: str):
         if not text:
             return
-
         try:
-            # Using wtype to simulate keyboard input on Wayland
-            subprocess.run(["wtype", text], check=True)
-        except FileNotFoundError:
-            SystemNotifier.notify("Error", "wtype is not installed!", "dialog-error")
+            # Copy to Wayland clipboard
+            subprocess.run(["wl-copy", text], check=True)
+            # Attempt to paste programmatically
+            try:
+                subprocess.run(["ydotool", "key", "29:1", "47:1", "47:0", "29:0"], check=True)
+            except Exception:
+                pass  # Fail silently if ydotoold is not configured yet
         except Exception as e:
-            SystemNotifier.notify("Error", f"Typing failed: {e}", "dialog-error")
+            print(f"Clipboard operation failed: {e}")
+
+
+class TrayIconManager:
+    """Manages the system tray icon and its states."""
+
+    def __init__(self):
+        self.icon = None
+        self._create_icon()
+
+    def _generate_image(self, color: str, transparent: bool = False):
+        """Generates a colored circle or a transparent pixel."""
+        width = 64
+        height = 64
+        image = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+
+        if not transparent:
+            dc = ImageDraw.Draw(image)
+            dc.ellipse((8, 8, 56, 56), fill=color)
+
+        return image
+
+    def _create_icon(self):
+        self.icon = pystray.Icon("MagType")
+        self.set_state_idle()
+
+    def set_state_idle(self):
+        """Transparent state (hidden)."""
+        if self.icon:
+            self.icon.icon = self._generate_image("", transparent=True)
+
+    def set_state_listening(self):
+        """Red state (recording)."""
+        if self.icon:
+            self.icon.icon = self._generate_image("red")
+
+    def set_state_transcribing(self):
+        """Green state (transcribing)."""
+        if self.icon:
+            self.icon.icon = self._generate_image("green")
+
+    def run(self):
+        self.icon.run()
 
 
 class AudioRecorder:
@@ -62,9 +90,6 @@ class AudioRecorder:
         self.stream = None
 
     def _callback(self, indata, frames, time, status):
-        """Called for each audio block by sounddevice."""
-        if status:
-            print(f"Audio status: {status}", file=sys.stderr)
         if self.is_recording:
             self.audio_data.append(indata.copy())
 
@@ -79,7 +104,6 @@ class AudioRecorder:
         self.stream.start()
 
     def stop(self) -> str:
-        """Stops recording and returns the path to the temporary WAV file."""
         self.is_recording = False
         if self.stream:
             self.stream.stop()
@@ -88,69 +112,91 @@ class AudioRecorder:
         if not self.audio_data:
             return ""
 
-        # Flatten the audio data array
         recording = np.concatenate(self.audio_data, axis=0)
-
-        # Save to a temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         sf.write(temp_file.name, recording, self.sample_rate)
         return temp_file.name
 
 
 class MagTypeDaemon:
-    """Main daemon process handling state and IPC."""
+    """Main daemon process handling state, IPC, and models."""
 
-    def __init__(self):
+    def __init__(self, tray_manager: TrayIconManager, config: argparse.Namespace):
         self.recorder = AudioRecorder()
-        self.notifier = SystemNotifier()
-        self.keyboard = KeyboardController()
-
-        # Load the model during initialization so it's ready instantly
-        self.notifier.notify("MagType", "Loading AI Model...", "system-run")
-        # device="cuda" for NVIDIA GPU, compute_type="float16" for better performance
-        self.model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-        self.notifier.notify("MagType", "Daemon Ready", "microphone")
-
+        self.clipboard = ClipboardController()
+        self.tray = tray_manager
         self.is_recording_state = False
+        self.config = config
+
+        # Setup config directory in ~/.config/magtype
+        self.config_dir = Path.home() / ".config" / "magtype"
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.vocab_file = self.config_dir / "vocabulary.txt"
+
+        self.vocabulary = self._load_vocabulary()
+
+        print(f"Loading Whisper '{self.config.model}' on {self.config.device.upper()}...")
+        # float16 is heavily optimized for modern NVIDIA GPUs (RTX series)
+        compute_type = "float16" if self.config.device == "cuda" else "int8"
+
+        self.model = WhisperModel(
+            self.config.model,
+            device=self.config.device,
+            compute_type=compute_type
+        )
+        print("Daemon is ready.")
+
+    def _load_vocabulary(self) -> str:
+        """Loads vocabulary from ~/.config/magtype/vocabulary.txt"""
+        if not self.vocab_file.exists():
+            # Create a default file if it doesn't exist
+            default_words = "MagType\nNixOS\nKDE Plasma\nPyCharm\nWayland\n"
+            self.vocab_file.write_text(default_words, encoding="utf-8")
+            return default_words.replace("\n", ", ")
+
+        with open(self.vocab_file, "r", encoding="utf-8") as f:
+            return f.read().replace("\n", ", ")
 
     def handle_toggle(self):
-        """Toggles between recording and transcribing states."""
+        """Switches between recording and transcribing states."""
         if not self.is_recording_state:
             self.is_recording_state = True
-            self.notifier.notify("MagType", "Listening...", "media-record")
+            self.tray.set_state_listening()
             self.recorder.start()
         else:
             self.is_recording_state = False
-            self.notifier.notify("MagType", "Transcribing...", "media-playback-start")
+            self.tray.set_state_transcribing()
 
-            # Stop recording and get the audio file
             audio_path = self.recorder.stop()
-
             if audio_path:
-                # Transcribe in a separate thread to not block the daemon
                 threading.Thread(target=self._transcribe_and_type, args=(audio_path,)).start()
+            else:
+                self.tray.set_state_idle()
 
     def _transcribe_and_type(self, audio_path: str):
         try:
-            segments, info = self.model.transcribe(audio_path, beam_size=5)
-            text = "".join([segment.text for segment in segments]).strip()
+            segments, info = self.model.transcribe(
+                audio_path,
+                beam_size=5,
+                language=self.config.lang,
+                initial_prompt=self.vocabulary if self.vocabulary else None
+            )
+            text = " ".join([segment.text.strip() for segment in segments]).strip()
 
-            # Add a trailing space for convenience when dictating multiple sentences
             if text:
-                self.keyboard.type_text(text + " ")
-                self.notifier.notify("MagType", "Done", "emblem-default")
-            else:
-                self.notifier.notify("MagType", "No speech detected", "dialog-warning")
+                self.clipboard.paste_text(text + " ")
 
         except Exception as e:
-            self.notifier.notify("Error", f"Transcription failed: {e}", "dialog-error")
+            print(f"Transcription failed: {e}")
         finally:
-            # Clean up the temporary file
             if os.path.exists(audio_path):
                 os.remove(audio_path)
+            # Reload vocabulary before next recording in case user edited the file
+            self.vocabulary = self._load_vocabulary()
+            self.tray.set_state_idle()
 
-    def start_server(self):
-        """Starts the Unix domain socket server."""
+    def start_socket_server(self):
+        """Runs the Unix socket server to receive IPC commands."""
         if os.path.exists(SOCKET_PATH):
             os.remove(SOCKET_PATH)
 
@@ -158,20 +204,21 @@ class MagTypeDaemon:
         server.bind(SOCKET_PATH)
         server.listen(1)
 
-        print(f"Daemon listening on {SOCKET_PATH}...")
-
         while True:
-            conn, addr = server.accept()
-            data = conn.recv(1024).decode('utf-8')
-            if data == "TOGGLE":
-                self.handle_toggle()
-            conn.close()
+            try:
+                conn, addr = server.accept()
+                data = conn.recv(1024).decode('utf-8')
+                if data == "TOGGLE":
+                    self.handle_toggle()
+                conn.close()
+            except Exception:
+                pass
 
 
 def send_toggle_command():
     """Client function to trigger the daemon."""
     if not os.path.exists(SOCKET_PATH):
-        print("Daemon is not running!")
+        print("Daemon is not running. Start it with --daemon")
         return
 
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -189,11 +236,22 @@ if __name__ == "__main__":
     parser.add_argument("--daemon", action="store_true", help="Start the background daemon")
     parser.add_argument("--toggle", action="store_true", help="Toggle recording state")
 
+    # Optional arguments for configuration (used only with --daemon)
+    parser.add_argument("--lang", type=str, default="uk", help="Transcription language (e.g., uk, en)")
+    parser.add_argument("--model", type=str, default="large-v3", help="Whisper model size (base, small, large-v3)")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cpu", "cuda"], help="Compute device (cpu, cuda)")
+
     args = parser.parse_args()
 
     if args.daemon:
-        daemon = MagTypeDaemon()
-        daemon.start_server()
+        tray = TrayIconManager()
+        daemon = MagTypeDaemon(tray, args)
+
+        socket_thread = threading.Thread(target=daemon.start_socket_server, daemon=True)
+        socket_thread.start()
+
+        tray.run()
+
     elif args.toggle:
         send_toggle_command()
     else:

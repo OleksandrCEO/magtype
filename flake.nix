@@ -17,6 +17,8 @@
         sounddevice
         soundfile
         faster-whisper
+        pystray        # System tray icon
+        pillow         # Image drawing for the tray icon
       ]);
     in
     {
@@ -24,17 +26,19 @@
         # System-level dependencies required for the script to run
         buildInputs = with pkgs; [
           pythonEnv
-          portaudio     # Required underlying C library for sounddevice
-          wtype         # Wayland keystroke simulator
-          libnotify     # Required for notify-send utility
-          ffmpeg        # Preparing for the future MP4 transcription task
+          portaudio
+          wl-clipboard   # For clipboard operations
+          ydotool        # Wayland automation tool (for pressing Ctrl+V later)
+          libnotify
+          ffmpeg
+
+          gobject-introspection # Дозволяє Python модулю 'gi' бачити системні бібліотеки
+          gtk3                  # Сама графічна бібліотека
+          libappindicator-gtk3  # Спеціальна бібліотека для іконок у системному треї
         ];
 
-        # Shell hook to verify the environment is loaded
         shellHook = ''
           echo "🎙️ MagType development environment loaded!"
-          echo "Python: $(python --version)"
-          echo "Available tools: wtype, notify-send, ffmpeg"
         '';
       };
     };
