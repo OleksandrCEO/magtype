@@ -39,42 +39,62 @@ class TrayIconManager:
     def __init__(self):
         from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
         from PyQt6.QtGui import QIcon
-        from PyQt6.QtCore import QTimer  # Додаємо таймер
+        from PyQt6.QtCore import QTimer
+        from pathlib import Path
         import sys
         import os
 
+        # Зберігаємо QIcon для доступу в інших методах класу
         self.QIcon = QIcon
 
+        # 1. Ініціалізація Qt Application
         if not QApplication.instance():
             self.app = QApplication(sys.argv)
         else:
             self.app = QApplication.instance()
 
+        # Щоб програма не закривалася при закритті вікон (яких у нас немає)
         self.app.setQuitOnLastWindowClosed(False)
 
-        # --- ХАК ДЛЯ CTRL+C ---
-        # Порожній таймер дозволяє Python перевіряти системні сигнали (SIGINT)
-        # без цього Qt повністю блокує обробку Ctrl+C
+        # 2. ХАК ДЛЯ CTRL+C
+        # Таймер "прокидає" інтерпретатор Python кожні 500мс для обробки сигналів
         self.timer = QTimer()
         self.timer.start(500)
         self.timer.timeout.connect(lambda: None)
-        # ----------------------
 
-        self.icons_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
-        os.makedirs(self.icons_dir, exist_ok=True)
+        # 3. ЛОГІКА ШЛЯХІВ (Nix Store safe)
+        user_icons_path = Path.home() / ".config" / "magtype" / "icons"
+        package_icons_path = Path(os.path.dirname(os.path.abspath(__file__))) / "icons"
 
+        # Визначаємо, де брати/створювати іконки
+        if user_icons_path.exists():
+            # Якщо користувач поклав свої іконки в конфіг — беремо їх
+            self.icons_dir = str(user_icons_path)
+        elif os.access(os.path.dirname(os.path.abspath(__file__)), os.W_OK):
+            # Якщо ми в звичайній папці з правами запису — використовуємо папку проєкту
+            self.icons_dir = str(package_icons_path)
+            os.makedirs(self.icons_dir, exist_ok=True)
+        else:
+            # Якщо ми в Nix Store (read-only) — створюємо іконки в ~/.config
+            user_icons_path.mkdir(parents=True, exist_ok=True)
+            self.icons_dir = str(user_icons_path)
+
+        # 4. Завантаження іконок
         self.icons = {
             "idle": self._get_svg_icon("idle.svg", "#888888"),
             "listening": self._get_svg_icon("listening.svg", "#ff4444"),
             "transcribing": self._get_svg_icon("transcribing.svg", "#44ff44")
         }
 
+        # 5. Створення Трей-меню
         self.tray = QSystemTrayIcon(self.icons["idle"])
-
         self.menu = QMenu()
-        self.menu.addAction("Вимкнути MagType").triggered.connect(self.stop_all)
-        self.tray.setContextMenu(self.menu)
 
+        # Додаємо пункт виходу
+        exit_action = self.menu.addAction("Вимкнути MagType")
+        exit_action.triggered.connect(self.stop_all)
+
+        self.tray.setContextMenu(self.menu)
         self.tray.show()
 
     def _get_svg_icon(self, filename: str, color: str):
