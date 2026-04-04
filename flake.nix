@@ -15,6 +15,12 @@
           # This global flag tells Nix to build/fetch packages with CUDA support
           # cudaSupport = true;
         };
+        overlays = [
+          (final: prev: {
+            # Enable CUDA support only for ctranslate2 and its dependencies
+            ctranslate2 = prev.ctranslate2.override { cudaSupport = true; };
+          })
+        ];
       };
 
       # Essential runtime libraries
