@@ -109,7 +109,7 @@
       nixosModules.default = { config, lib, pkgs, ... }: {
         options.services.magtype.enable = lib.mkEnableOption "MagType AI Dictation";
         config = lib.mkIf config.services.magtype.enable {
-          environment.systemPackages = [ self.packages.${pkgs.system}.default ];
+          environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
         };
       };
 
