@@ -70,7 +70,9 @@
 
           # Deploy source code and assets
           cp main.py $out/share/magtype/
-          cp -r icons/* $out/share/icons/magtype/ || true
+          if [ -d "icons" ]; then
+            cp -r icons/* $out/share/icons/magtype/
+          fi
 
           # Create a wrapper to handle environment variables and library paths
           makeWrapper ${pythonEnv}/bin/python $out/bin/magtype \
