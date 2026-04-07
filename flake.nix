@@ -111,6 +111,11 @@
         options.services.magtype.enable = lib.mkEnableOption "MagType AI Dictation";
         config = lib.mkIf config.services.magtype.enable {
           environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+
+          systemd.tmpfiles.rules = [
+            "d /var/lib/magtype 0775 root users -"
+            "d /var/lib/magtype/models 0775 root users -"
+          ];
         };
       };
 

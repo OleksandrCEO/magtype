@@ -13,7 +13,9 @@ from core.icons import IconManager, get_socket_path
 # --- Constants ---
 SOCKET_PATH = get_socket_path()
 AUDIO_SAMPLE_RATE = 16000
-MODEL_BASE_DIR = "/var/lib/magtype/models/"
+
+SHARED_MODEL_DIR = "/var/lib/magtype/models"
+USER_MODEL_DIR = os.path.expanduser("~/.cache/magtype/models")
 
 
 class TrayIconManager:
@@ -148,20 +150,22 @@ class MagTypeDaemon:
         self.vocab_file = Path.home() / ".config" / "magtype" / "vocabulary.txt"
         self.vocabulary = self._load_vocabulary()
 
-        print(f"Initializing Whisper ({self.config.model}) on {self.config.device}...")
-        full_model_path = os.path.join(MODEL_BASE_DIR, self.config.model)
+        try:
+            os.makedirs(SHARED_MODEL_DIR, exist_ok=True)
+            download_dir = SHARED_MODEL_DIR
 
-        if os.path.exists(full_model_path):
-            actual_model = full_model_path
-            print(f"Initializing local Whisper ({actual_model}) on {self.config.device}...")
-        else:
-            actual_model = self.config.model
-            print(f"Downloading/Initializing Whisper ({actual_model}) from HF on {self.config.device}...")
+        except PermissionError:
+            print(f"[!] No permission to write to {SHARED_MODEL_DIR}. Using local cache.")
+            os.makedirs(USER_MODEL_DIR, exist_ok=True)
+            download_dir = USER_MODEL_DIR
+
+        print(f"Initializing Whisper ({self.config.model}) on {self.config.device}...")
 
         self.model = WhisperModel(
-            actual_model,
+            self.config.model,
             device=self.config.device,
-            compute_type="float16" if self.config.device == "cuda" else "int8"
+            compute_type="float16" if self.config.device == "cuda" else "int8",
+            download_root=download_dir
         )
 
     def _load_vocabulary(self) -> str:
